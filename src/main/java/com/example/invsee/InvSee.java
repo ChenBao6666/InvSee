@@ -36,7 +36,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
     private Method nbtIoWrite;
     private Method codecParse;
     private Method codecEncode;
-    private Object nbtOps;
+    private Object registryOps;      // RegistryOps with registry access for codec
     private Object itemCodec;
     private Class<?> compoundTagClass;
     private Class<?> listTagClass;
@@ -71,6 +71,25 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
         try {
             Object craftServer = Bukkit.getServer();
 
+            // RegistryAccess + RegistryOps for codec (needed to resolve item IDs)
+            Object dedicatedServer = craftServer.getClass().getMethod("getServer").invoke(craftServer);
+            Object registryAccess = dedicatedServer.getClass().getMethod("registryAccess").invoke(dedicatedServer);
+            Object nbtOps = Class.forName("net.minecraft.nbt.NbtOps").getField("INSTANCE").get(null);
+            Class<?> registryOpsClass = Class.forName("net.minecraft.resources.RegistryOps");
+            Method registryOpsCreate = null;
+            for (Method m : registryOpsClass.getMethods()) {
+                if (m.getName().equals("create") && m.getParameterCount() == 2) {
+                    registryOpsCreate = m;
+                    break;
+                }
+            }
+            if (registryOpsCreate != null) {
+                registryOps = registryOpsCreate.invoke(null, nbtOps, registryAccess);
+            } else {
+                // Fallback: use plain NbtOps if RegistryOps.create not found
+                registryOps = nbtOps;
+            }
+
             // Derive NMS ItemStack via CraftItemStack bridge (remapping-safe)
             Class<?> craftItemStack = craftServer.getClass().getClassLoader()
                     .loadClass("org.bukkit.craftbukkit.inventory.CraftItemStack");
@@ -80,13 +99,10 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
             Class<?> nmsItemStack = nmsDummy.getClass();
             asBukkitCopy = craftItemStack.getMethod("asBukkitCopy", nmsItemStack);
 
-            // ItemStack.CODEC (static field)
+            // ItemStack.CODEC
             itemCodec = nmsItemStack.getField("CODEC").get(null);
 
-            // NbtOps.INSTANCE
-            nbtOps = Class.forName("net.minecraft.nbt.NbtOps").getField("INSTANCE").get(null);
-
-            // Cache codec methods
+            // Codec methods
             for (Method m : itemCodec.getClass().getMethods()) {
                 if (m.getName().equals("parse") && m.getParameterCount() == 2) codecParse = m;
                 if (m.getName().equals("encodeStart") && m.getParameterCount() == 2) codecEncode = m;
@@ -115,6 +131,17 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
     // ==================== NBT Helpers ====================
 
+    /** 1.21.5+: CompoundTag.getList() returns Optional<ListTag>, must unwrap */
+    private Object unwrapOptional(Object obj) throws Exception {
+        if (obj == null) return null;
+        // If it has an "orElseThrow" method, it's an Optional
+        try {
+            return obj.getClass().getMethod("orElseThrow").invoke(obj);
+        } catch (NoSuchMethodException e) {
+            return obj; // Not an Optional, return as-is
+        }
+    }
+
     private Object loadPlayerData(OfflinePlayer offline) throws Exception {
         return playerGetData.invoke(offline);
     }
@@ -127,16 +154,16 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
         }
     }
 
-    /** Parse NBT tag to NMS ItemStack via ItemStack.CODEC.parse(NbtOps, tag) */
+    /** Parse NBT tag to NMS ItemStack via ItemStack.CODEC.parse(RegistryOps, tag) */
     private Object parseNmsItem(Object tag) throws Exception {
-        Object dataResult = codecParse.invoke(itemCodec, nbtOps, tag);
+        Object dataResult = codecParse.invoke(itemCodec, registryOps, tag);
         Object optional = dataResult.getClass().getMethod("result").invoke(dataResult);
         return optional.getClass().getMethod("orElseThrow").invoke(optional);
     }
 
-    /** Encode NMS ItemStack to NBT tag via ItemStack.CODEC.encodeStart(NbtOps, stack) */
+    /** Encode NMS ItemStack to NBT tag via ItemStack.CODEC.encodeStart(RegistryOps, stack) */
     private Object saveNmsItem(Object nmsStack) throws Exception {
-        Object dataResult = codecEncode.invoke(itemCodec, nbtOps, nmsStack);
+        Object dataResult = codecEncode.invoke(itemCodec, registryOps, nmsStack);
         Object optional = dataResult.getClass().getMethod("result").invoke(dataResult);
         return optional.getClass().getMethod("orElseThrow").invoke(optional);
     }
@@ -252,7 +279,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
         try {
             Object rootTag = loadPlayerData(offline);
-            Object invList = rootTag.getClass().getMethod("getList", String.class).invoke(rootTag, "Inventory");
+            Object invList = unwrapOptional(
+                    rootTag.getClass().getMethod("getList", String.class).invoke(rootTag, "Inventory"));
 
             Component title = Component.text(targetName + " 的背包")
                     .color(NamedTextColor.DARK_PURPLE)
@@ -292,18 +320,20 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
         try {
             OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
             Object rootTag = loadPlayerData(offline);
-            Object oldInvList = rootTag.getClass().getMethod("getList", String.class).invoke(rootTag, "Inventory");
+            Object oldInvList = unwrapOptional(
+                    rootTag.getClass().getMethod("getList", String.class).invoke(rootTag, "Inventory"));
 
             Object newList = listTagClass.getConstructor().newInstance();
             Method listAdd = listTagClass.getMethod("add", tagClass);
 
-            // Preserve items with unmanaged slots
-            int oldSize = (int) oldInvList.getClass().getMethod("size").invoke(oldInvList);
-            for (int i = 0; i < oldSize; i++) {
-                Object itemTag = listTagClass.getMethod("getCompound", int.class).invoke(oldInvList, i);
-                byte slot = (byte) compoundTagClass.getMethod("getByte", String.class).invoke(itemTag, "Slot");
-                if (isManagedSlot(slot)) continue;
-                listAdd.invoke(newList, itemTag);
+            if (oldInvList != null) {
+                int oldSize = (int) oldInvList.getClass().getMethod("size").invoke(oldInvList);
+                for (int i = 0; i < oldSize; i++) {
+                    Object itemTag = listTagClass.getMethod("getCompound", int.class).invoke(oldInvList, i);
+                    byte slot = (byte) compoundTagClass.getMethod("getByte", String.class).invoke(itemTag, "Slot");
+                    if (isManagedSlot(slot)) continue;
+                    listAdd.invoke(newList, itemTag);
+                }
             }
 
             for (int mirrorSlot = 0; mirrorSlot < 41; mirrorSlot++) {
@@ -317,7 +347,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
                 listAdd.invoke(newList, tag);
             }
 
-            rootTag.getClass().getMethod("put", String.class, tagClass).invoke(rootTag, "Inventory", newList);
+            Method put = compoundTagClass.getMethod("put", String.class, tagClass);
+            put.invoke(rootTag, "Inventory", newList);
             savePlayerData(uuid, rootTag);
 
         } catch (Exception e) {
@@ -337,7 +368,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
         try {
             Object rootTag = loadPlayerData(offline);
-            Object enderList = rootTag.getClass().getMethod("getList", String.class).invoke(rootTag, "EnderItems");
+            Object enderList = unwrapOptional(
+                    rootTag.getClass().getMethod("getList", String.class).invoke(rootTag, "EnderItems"));
             int size = (int) enderList.getClass().getMethod("size").invoke(enderList);
 
             Component title = Component.text(targetName + " 的末影箱")
@@ -382,7 +414,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
                 listAdd.invoke(newList, tag);
             }
 
-            rootTag.getClass().getMethod("put", String.class, tagClass).invoke(rootTag, "EnderItems", newList);
+            Method put = compoundTagClass.getMethod("put", String.class, tagClass);
+            put.invoke(rootTag, "EnderItems", newList);
             savePlayerData(uuid, rootTag);
 
         } catch (Exception e) {
