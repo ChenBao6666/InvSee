@@ -292,7 +292,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
                 for (int i = 0; i < listSize; i++) {
                     Object itemTag = unwrapOptional(
                             listTagClass.getMethod("getCompound", int.class).invoke(invList, i));
-                    byte slot = (byte) compoundTagClass.getMethod("getByte", String.class).invoke(itemTag, "Slot");
+                    byte slot = (byte) unwrapOptional(
+                            compoundTagClass.getMethod("getByte", String.class).invoke(itemTag, "Slot"));
                     Object nmsStack = parseNmsItem(itemTag);
                     boolean empty = (boolean) nmsStack.getClass().getMethod("isEmpty").invoke(nmsStack);
                     if (!empty) {
@@ -332,7 +333,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
                 for (int i = 0; i < oldSize; i++) {
                     Object itemTag = unwrapOptional(
                             listTagClass.getMethod("getCompound", int.class).invoke(oldInvList, i));
-                    byte slot = (byte) compoundTagClass.getMethod("getByte", String.class).invoke(itemTag, "Slot");
+                    byte slot = (byte) unwrapOptional(
+                            compoundTagClass.getMethod("getByte", String.class).invoke(itemTag, "Slot"));
                     if (isManagedSlot(slot)) continue;
                     listAdd.invoke(newList, itemTag);
                 }
