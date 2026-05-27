@@ -1,0 +1,26 @@
+name: InvSee
+version: 1.0.0
+author: Administrator
+main: com.example.invsee.InvSee
+api-version: "1.21"
+description: View and edit other players' inventory and ender chest (online + offline)
+folia-supported: true
+permissions:
+  invsee.view:
+    description: Allows using /invsee to view other players' inventories
+    default: op
+  invsee.endersee:
+    description: Allows using /endersee to view other players' ender chests
+    default: op
+  invsee.modify:
+    description: Allows modifying items when viewing others' inventory/ender chest
+    default: op
+commands:
+  invsee:
+    description: View a player's inventory
+    aliases: [invs]
+    usage: /<command> <player>
+  endersee:
+    description: View a player's ender chest
+    aliases: [ecsee]
+    usage: /<command> <player>
