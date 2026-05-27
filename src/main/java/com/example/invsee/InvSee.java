@@ -143,7 +143,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
     }
 
     private Object loadPlayerData(OfflinePlayer offline) throws Exception {
-        return playerGetData.invoke(offline);
+        return unwrapOptional(playerGetData.invoke(offline));
     }
 
     private void savePlayerData(UUID uuid, Object rootTag) throws Exception {
@@ -290,7 +290,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
             if (invList != null) {
                 int listSize = (int) invList.getClass().getMethod("size").invoke(invList);
                 for (int i = 0; i < listSize; i++) {
-                    Object itemTag = listTagClass.getMethod("getCompound", int.class).invoke(invList, i);
+                    Object itemTag = unwrapOptional(
+                            listTagClass.getMethod("getCompound", int.class).invoke(invList, i));
                     byte slot = (byte) compoundTagClass.getMethod("getByte", String.class).invoke(itemTag, "Slot");
                     Object nmsStack = parseNmsItem(itemTag);
                     boolean empty = (boolean) nmsStack.getClass().getMethod("isEmpty").invoke(nmsStack);
@@ -329,7 +330,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
             if (oldInvList != null) {
                 int oldSize = (int) oldInvList.getClass().getMethod("size").invoke(oldInvList);
                 for (int i = 0; i < oldSize; i++) {
-                    Object itemTag = listTagClass.getMethod("getCompound", int.class).invoke(oldInvList, i);
+                    Object itemTag = unwrapOptional(
+                            listTagClass.getMethod("getCompound", int.class).invoke(oldInvList, i));
                     byte slot = (byte) compoundTagClass.getMethod("getByte", String.class).invoke(itemTag, "Slot");
                     if (isManagedSlot(slot)) continue;
                     listAdd.invoke(newList, itemTag);
@@ -378,7 +380,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
             Inventory inv = Bukkit.createInventory(null, 27, title);
 
             for (int i = 0; i < size && i < 27; i++) {
-                Object itemTag = listTagClass.getMethod("getCompound", int.class).invoke(enderList, i);
+                Object itemTag = unwrapOptional(
+                        listTagClass.getMethod("getCompound", int.class).invoke(enderList, i));
                 Object nmsStack = parseNmsItem(itemTag);
                 boolean empty = (boolean) nmsStack.getClass().getMethod("isEmpty").invoke(nmsStack);
                 if (!empty) {
