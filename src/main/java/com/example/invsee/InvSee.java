@@ -96,6 +96,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
             Class<?> craftOfflinePlayer = craftServer.getClass().getClassLoader()
                     .loadClass("org.bukkit.craftbukkit.CraftOfflinePlayer");
             playerGetData = craftOfflinePlayer.getDeclaredMethod("getData");
+            playerGetData.setAccessible(true);
 
             // NBT classes
             compoundTagClass = Class.forName("net.minecraft.nbt.CompoundTag");
