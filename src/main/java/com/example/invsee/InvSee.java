@@ -24,8 +24,10 @@ import java.util.*;
 
 public final class InvSee extends JavaPlugin implements CommandExecutor, TabCompleter, Listener {
 
+    // Online: mirror -> target player (inv/ender)
     private final Map<Inventory, Player> onlineInvTargets = new HashMap<>();
     private final Map<Inventory, Player> onlineEnderTargets = new HashMap<>();
+    // Offline: mirror -> target UUID
     private final Map<Inventory, UUID> offlineInvTargets = new HashMap<>();
     private final Map<Inventory, UUID> offlineEnderTargets = new HashMap<>();
 
@@ -36,7 +38,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
     private Method nbtIoWrite;
     private Method codecParse;
     private Method codecEncode;
-    private Object registryOps;      // RegistryOps with registry access for codec
+    private Object registryOps;
     private Object itemCodec;
     private Class<?> compoundTagClass;
     private Class<?> listTagClass;
@@ -71,7 +73,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
         try {
             Object craftServer = Bukkit.getServer();
 
-            // RegistryAccess + RegistryOps for codec (needed to resolve item IDs)
+            // RegistryAccess + RegistryOps for codec
             Object dedicatedServer = craftServer.getClass().getMethod("getServer").invoke(craftServer);
             Object registryAccess = dedicatedServer.getClass().getMethod("registryAccess").invoke(dedicatedServer);
             Object nbtOps = Class.forName("net.minecraft.nbt.NbtOps").getField("INSTANCE").get(null);
@@ -86,11 +88,10 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
             if (registryOpsCreate != null) {
                 registryOps = registryOpsCreate.invoke(null, nbtOps, registryAccess);
             } else {
-                // Fallback: use plain NbtOps if RegistryOps.create not found
                 registryOps = nbtOps;
             }
 
-            // Derive NMS ItemStack via CraftItemStack bridge (remapping-safe)
+            // Derive NMS ItemStack via CraftItemStack bridge
             Class<?> craftItemStack = craftServer.getClass().getClassLoader()
                     .loadClass("org.bukkit.craftbukkit.inventory.CraftItemStack");
             ItemStack dummy = new ItemStack(Material.AIR);
@@ -99,10 +100,8 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
             Class<?> nmsItemStack = nmsDummy.getClass();
             asBukkitCopy = craftItemStack.getMethod("asBukkitCopy", nmsItemStack);
 
-            // ItemStack.CODEC
             itemCodec = nmsItemStack.getField("CODEC").get(null);
 
-            // Codec methods
             for (Method m : itemCodec.getClass().getMethods()) {
                 if (m.getName().equals("parse") && m.getParameterCount() == 2) codecParse = m;
                 if (m.getName().equals("encodeStart") && m.getParameterCount() == 2) codecEncode = m;
@@ -131,14 +130,12 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
     // ==================== NBT Helpers ====================
 
-    /** 1.21.5+: CompoundTag.getList() returns Optional<ListTag>, must unwrap */
     private Object unwrapOptional(Object obj) throws Exception {
         if (obj == null) return null;
-        // If it has an "orElseThrow" method, it's an Optional
         try {
             return obj.getClass().getMethod("orElseThrow").invoke(obj);
         } catch (NoSuchMethodException e) {
-            return obj; // Not an Optional, return as-is
+            return obj;
         }
     }
 
@@ -148,20 +145,20 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
     private void savePlayerData(UUID uuid, Object rootTag) throws Exception {
         File worldDir = Bukkit.getWorlds().get(0).getWorldFolder();
-        File dataFile = new File(worldDir, "playerdata/" + uuid + ".dat");
-        if (dataFile.exists()) {
-            nbtIoWrite.invoke(null, rootTag, dataFile.toPath());
-        }
+        File dataDir = new File(worldDir, "playerdata");
+        File dataFile = new File(dataDir, uuid + ".dat");
+        // Always save — create file if it doesn't exist
+        if (!dataDir.exists()) dataDir.mkdirs();
+        nbtIoWrite.invoke(null, rootTag, dataFile.toPath());
+        getLogger().info("Saved player data for " + uuid + " to " + dataFile.getAbsolutePath());
     }
 
-    /** Parse NBT tag to NMS ItemStack via ItemStack.CODEC.parse(RegistryOps, tag) */
     private Object parseNmsItem(Object tag) throws Exception {
         Object dataResult = codecParse.invoke(itemCodec, registryOps, tag);
         Object optional = dataResult.getClass().getMethod("result").invoke(dataResult);
         return optional.getClass().getMethod("orElseThrow").invoke(optional);
     }
 
-    /** Encode NMS ItemStack to NBT tag via ItemStack.CODEC.encodeStart(RegistryOps, stack) */
     private Object saveNmsItem(Object nmsStack) throws Exception {
         Object dataResult = codecEncode.invoke(itemCodec, registryOps, nmsStack);
         Object optional = dataResult.getClass().getMethod("result").invoke(dataResult);
@@ -172,11 +169,11 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
     private static int nbtSlotToMirror(byte slot) {
         if (slot >= 0 && slot <= 35) return slot;
-        if (slot == 100) return 36; // boots
-        if (slot == 101) return 37; // leggings
-        if (slot == 102) return 38; // chestplate
-        if (slot == 103) return 39; // helmet
-        if (slot == -106) return 40; // offhand
+        if (slot == 100) return 36;
+        if (slot == 101) return 37;
+        if (slot == 102) return 38;
+        if (slot == 103) return 39;
+        if (slot == -106) return 40;
         return -1;
     }
 
@@ -233,7 +230,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
         return true;
     }
 
-    // ==================== Online Invsee ====================
+    // ==================== Online Invsee (live sync) ====================
 
     private void openOnlineInvsee(Player viewer, Player target) {
         Component title = Component.text(target.getName() + " 的背包")
@@ -241,13 +238,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
                 .decoration(TextDecoration.ITALIC, false);
         Inventory mirror = Bukkit.createInventory(null, 45, title);
 
-        ItemStack[] contents = target.getInventory().getContents();
-        for (int i = 0; i < 36; i++) mirror.setItem(i, contents[i]);
-
-        ItemStack[] armor = target.getInventory().getArmorContents();
-        for (int i = 0; i < 4; i++) mirror.setItem(36 + i, armor[i]);
-
-        mirror.setItem(40, target.getInventory().getItemInOffHand());
+        syncInvToMirror(mirror, target);
 
         ItemStack glass = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
         glass.editMeta(meta -> meta.displayName(Component.text("§7↑ 装备栏 ↑").decoration(TextDecoration.ITALIC, false)));
@@ -255,6 +246,24 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
         onlineInvTargets.put(mirror, target);
         viewer.openInventory(mirror);
+
+        // Periodic sync: refresh mirror from target's live inventory every 1 second
+        Bukkit.getGlobalRegionScheduler().runAtFixedRate(this, t -> {
+            if (!viewer.isOnline() || !viewer.getOpenInventory().getTopInventory().equals(mirror)) {
+                t.cancel();
+                return;
+            }
+            syncInvToMirror(mirror, target);
+        }, 20L, 20L);
+    }
+
+    /** Copy target's live inventory into the mirror (preserving glass panes) */
+    private void syncInvToMirror(Inventory mirror, Player target) {
+        ItemStack[] contents = target.getInventory().getContents();
+        for (int i = 0; i < 36; i++) mirror.setItem(i, contents[i]);
+        ItemStack[] armor = target.getInventory().getArmorContents();
+        for (int i = 0; i < 4; i++) mirror.setItem(36 + i, armor[i]);
+        mirror.setItem(40, target.getInventory().getItemInOffHand());
     }
 
     private void openOnlineEnderChest(Player viewer, Player target) {
@@ -265,6 +274,15 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
         mirror.setContents(target.getEnderChest().getContents());
         onlineEnderTargets.put(mirror, target);
         viewer.openInventory(mirror);
+
+        // Periodic sync for ender chest
+        Bukkit.getGlobalRegionScheduler().runAtFixedRate(this, t -> {
+            if (!viewer.isOnline() || !viewer.getOpenInventory().getTopInventory().equals(mirror)) {
+                t.cancel();
+                return;
+            }
+            mirror.setContents(target.getEnderChest().getContents());
+        }, 20L, 20L);
     }
 
     // ==================== Offline Invsee ====================
@@ -314,6 +332,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
         } catch (Exception e) {
             getLogger().warning("Failed loading offline inventory for " + targetName + ": " + e.getMessage());
+            e.printStackTrace();
             viewer.sendMessage("§cFailed to load player data: " + e.getMessage());
         }
     }
@@ -328,6 +347,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
             Object newList = listTagClass.getConstructor().newInstance();
             Method listAdd = listTagClass.getMethod("add", tagClass);
 
+            // Preserve items in unmanaged slots
             if (oldInvList != null) {
                 int oldSize = (int) oldInvList.getClass().getMethod("size").invoke(oldInvList);
                 for (int i = 0; i < oldSize; i++) {
@@ -340,6 +360,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
                 }
             }
 
+            // Write mirror contents to NBT
             for (int mirrorSlot = 0; mirrorSlot < 41; mirrorSlot++) {
                 ItemStack item = mirror.getItem(mirrorSlot);
                 int nbtSlot = mirrorSlotToNbt(mirrorSlot);
@@ -357,6 +378,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
         } catch (Exception e) {
             getLogger().warning("Failed saving offline inventory for " + uuid + ": " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -396,6 +418,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
         } catch (Exception e) {
             getLogger().warning("Failed loading offline ender chest for " + targetName + ": " + e.getMessage());
+            e.printStackTrace();
             viewer.sendMessage("§cFailed to load player data: " + e.getMessage());
         }
     }
@@ -425,6 +448,7 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
 
         } catch (Exception e) {
             getLogger().warning("Failed saving offline ender chest for " + uuid + ": " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -460,30 +484,35 @@ public final class InvSee extends JavaPlugin implements CommandExecutor, TabComp
     public void onInventoryClose(InventoryCloseEvent event) {
         Inventory inv = event.getInventory();
 
+        // Online invsee: write mirror BACK to target's live inventory
         Player invTarget = onlineInvTargets.remove(inv);
         if (invTarget != null) {
-            ItemStack[] contents = new ItemStack[36];
-            for (int i = 0; i < 36; i++) contents[i] = inv.getItem(i);
-            invTarget.getInventory().setContents(contents);
-            ItemStack[] armor = new ItemStack[4];
-            for (int i = 0; i < 4; i++) armor[i] = inv.getItem(36 + i);
-            invTarget.getInventory().setArmorContents(armor);
+            // Only write slots the viewer may have modified (0-40)
+            for (int i = 0; i < 36; i++) {
+                invTarget.getInventory().setItem(i, inv.getItem(i));
+            }
+            for (int i = 0; i < 4; i++) {
+                invTarget.getInventory().setItem(36 + i, inv.getItem(36 + i)); // armor via setItem
+            }
             invTarget.getInventory().setItemInOffHand(inv.getItem(40));
             return;
         }
 
+        // Online ender: write mirror to target's ender chest
         Player enderTarget = onlineEnderTargets.remove(inv);
         if (enderTarget != null) {
             enderTarget.getEnderChest().setContents(inv.getContents());
             return;
         }
 
+        // Offline invsee: save to NBT file
         UUID invUuid = offlineInvTargets.remove(inv);
         if (invUuid != null) {
             saveOfflineInvsee(inv, invUuid);
             return;
         }
 
+        // Offline ender: save to NBT file
         UUID enderUuid = offlineEnderTargets.remove(inv);
         if (enderUuid != null) {
             saveOfflineEnderChest(inv, enderUuid);
