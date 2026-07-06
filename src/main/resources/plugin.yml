@@ -15,6 +15,30 @@ permissions:
   invsee.modify:
     description: Allows modifying items when viewing others' inventory/ender chest
     default: op
+  invsee.enderchest:
+    description: Allows using /ec to open your own ender chest
+    default: op
+  invsee.workbench:
+    description: Allows using /wb to open a workbench
+    default: op
+  invsee.anvil:
+    description: Allows using /anvil to open a portable anvil
+    default: op
+  invsee.grindstone:
+    description: Allows using /grindstone to open a portable grindstone
+    default: op
+  invsee.enchanttable:
+    description: Allows using /et to open a portable enchanting table
+    default: op
+  invsee.stonecutter:
+    description: Allows using /sc to open a portable stonecutter
+    default: op
+  invsee.cartography:
+    description: Allows using /ct to open a portable cartography table
+    default: op
+  invsee.loom:
+    description: Allows using /loom to open a portable loom
+    default: op
 commands:
   invsee:
     description: View a player's inventory
@@ -24,3 +48,32 @@ commands:
     description: View a player's ender chest
     aliases: [ecsee]
     usage: /<command> <player>
+  enderchest:
+    description: Open your own ender chest
+    aliases: [ec]
+    usage: /<command>
+  workbench:
+    description: Open a workbench
+    aliases: [wb, craft]
+    usage: /<command>
+  anvil:
+    description: Open a portable anvil
+    usage: /<command>
+  grindstone:
+    description: Open a portable grindstone
+    usage: /<command>
+  enchanttable:
+    description: Open a portable enchanting table
+    aliases: [et]
+    usage: /<command>
+  stonecutter:
+    description: Open a portable stonecutter
+    aliases: [sc]
+    usage: /<command>
+  cartography:
+    description: Open a portable cartography table
+    aliases: [ct]
+    usage: /<command>
+  loom:
+    description: Open a portable loom
+    usage: /<command>
